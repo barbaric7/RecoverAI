@@ -21,6 +21,14 @@ FAILED PAYMENT → OBSERVE → REASON (LLM) → POLICY GATE → ACT → VERIFY �
 
 *60-second loop: Run Recovery on 500 failed payments → P0042 retried & recovered → P0099 blocked by policy & escalated → P0210 stale event refused → audit trail. ([mp4](docs/demo.mp4))*
 
+## Screenshots
+
+| Overview | Payment detail (policy blocked) | Audit trail |
+|---|---|---|
+| ![](screenshots/01-overview.png) | ![](screenshots/06-payment-P0099-escalated.png) | ![](screenshots/10-audit-P0042.png) |
+
+13 annotated captures in [`screenshots/`](screenshots/README.md). Live deploy guide: [`DEPLOY.md`](DEPLOY.md) (Vercel + Render, free tier).
+
 ## Results at a glance
 
 ![results](docs/results.png)
@@ -140,7 +148,10 @@ Every check is recorded with pass/fail + human-readable detail and shown on Scre
 
 ## Deploy (live link for judges)
 
-Single container, FastAPI serves the built React app:
+**Recommended: Vercel (frontend) + Render (API)** — step-by-step in [`DEPLOY.md`](DEPLOY.md).
+`frontend/vercel.json` proxies `/api/*` to Render so there's no CORS and no build-time env.
+
+Single-container alternative (FastAPI serves the built React app):
 
 | Target | How |
 |---|---|

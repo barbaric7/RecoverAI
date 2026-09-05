@@ -1,14 +1,19 @@
-# One-click deploy on Render (free tier). Set OPENAI_API_KEY in the dashboard.
+# Backend API on Render (free tier). Frontend lives on Vercel and proxies /api here.
+# Deploy: Render dashboard → New → Blueprint → select this repo.
 services:
   - type: web
-    name: recoverai
+    name: recoverai-api
     runtime: docker
     plan: free
     healthCheckPath: /api/health
     envVars:
       - key: OPENAI_API_KEY
-        sync: false
+        sync: false          # paste in dashboard
       - key: OPENAI_MODEL
-        value: gpt-4o-mini
+        value: openai/gpt-4.1
+      - key: LLM_SAMPLE
+        value: "12"
+      - key: LLM_CONCURRENCY
+        value: "1"
       - key: RECOVERAI_PROVIDER
         value: simulated
