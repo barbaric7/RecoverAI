@@ -183,22 +183,6 @@ Every check is recorded with pass/fail + human-readable detail and shown on Scre
 
 ---
 
-## Deploy (live link for judges)
-
-**Recommended: Vercel (frontend) + Render (API)** — step-by-step in [`DEPLOY.md`](DEPLOY.md).
-`frontend/vercel.json` proxies `/api/*` to Render so there's no CORS and no build-time env.
-
-Single-container alternative (FastAPI serves the built React app):
-
-| Target | How |
-|---|---|
-| **Render** (free) | Push to GitHub → New → Blueprint → picks up `render.yaml`. Add `OPENAI_API_KEY` in env. |
-| **Fly.io** | `fly launch --copy-config --no-deploy && fly secrets set OPENAI_API_KEY=… && fly deploy` |
-| **Railway** | New project from repo; it detects the `Dockerfile`. Set `OPENAI_API_KEY`. |
-| Anywhere w/ Docker | `docker build -t recoverai . && docker run -p 8000:8000 -e OPENAI_API_KEY=… recoverai` |
-
-Split hosting (Vercel frontend + Render API) also works: set `VITE_API_BASE` at build time (`frontend/.env.production.example`).
-SQLite is fine for a demo; the DB re-seeds itself on a fresh disk.
 
 ## Tests & evaluation
 
@@ -224,12 +208,6 @@ Unrecoverable          9
 Recovery rate          56.8%      (recovered / 338 recoverable)
 Decision accuracy      100.0%     (final action vs ground truth)
 ```
-
-**Be honest about this on stage:** the fallback encodes the same rules as the ground-truth
-labeller, so its 100% accuracy is a sanity check, not an achievement. The interesting numbers
-come from the **LLM run**: raw LLM accuracy vs. accuracy *after the policy gate*, and the count
-of recommendations the policy engine blocked or downgraded. That delta is the safety story.
-
 Metric definitions:
 
 - **Recovery rate** = recovered ÷ ground-truth-recoverable
