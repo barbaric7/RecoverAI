@@ -1,0 +1,109 @@
+{
+  "total_payments": 500,
+  "processed": 500,
+  "at_risk_amount": 2064700.0,
+  "recovered_amount": 540308.0,
+  "escalated_amount": 1116247.0,
+  "recoverable_count": 338,
+  "auto_handled": 338,
+  "recovered_count": 192,
+  "escalated_count": 153,
+  "unresolved_count": 146,
+  "unrecoverable_count": 9,
+  "recovery_rate": 56.80473372781065,
+  "attempt_success_rate": 56.80473372781065,
+  "decision_accuracy": 100.0,
+  "llm_raw_accuracy": 100.0,
+  "policy_overrides": 0,
+  "policy_override_breakdown": {},
+  "llm_decisions": 0,
+  "fallback_decisions": 500,
+  "status_counts": {
+    "RECOVERED": 192,
+    "UNRESOLVED": 146,
+    "ESCALATED": 153,
+    "UNRECOVERABLE": 9
+  },
+  "final_action_counts": {
+    "CREATE_PAYMENT_LINK": 126,
+    "RETRY_PAYMENT": 150,
+    "WAIT_AND_RETRY": 62,
+    "ESCALATE_TO_HUMAN": 153,
+    "MARK_UNRECOVERABLE": 9
+  },
+  "proposed_action_counts": {
+    "CREATE_PAYMENT_LINK": 126,
+    "RETRY_PAYMENT": 150,
+    "WAIT_AND_RETRY": 62,
+    "ESCALATE_TO_HUMAN": 153,
+    "MARK_UNRECOVERABLE": 9
+  },
+  "by_failure_reason": {
+    "AUTH_FAILURE": {
+      "count": 51,
+      "recovered": 21,
+      "amount_recovered": 64179.0,
+      "at_risk": 207549.0
+    },
+    "BANK_ERROR": {
+      "count": 49,
+      "recovered": 25,
+      "amount_recovered": 60675.0,
+      "at_risk": 261051.0
+    },
+    "EXPIRED_CARD": {
+      "count": 49,
+      "recovered": 15,
+      "amount_recovered": 44585.0,
+      "at_risk": 174151.0
+    },
+    "INSUFFICIENT_FUNDS": {
+      "count": 90,
+      "recovered": 33,
+      "amount_recovered": 99267.0,
+      "at_risk": 368710.0
+    },
+    "REPEATED_FAILURE": {
+      "count": 24,
+      "recovered": 0,
+      "amount_recovered": 0.0,
+      "at_risk": 66476.0
+    },
+    "SUBSCRIPTION_FAILURE": {
+      "count": 45,
+      "recovered": 27,
+      "amount_recovered": 69573.0,
+      "at_risk": 134255.0
+    },
+    "PAYMENT_TIMEOUT": {
+      "count": 45,
+      "recovered": 21,
+      "amount_recovered": 61679.0,
+      "at_risk": 169455.0
+    },
+    "BANK_TIMEOUT": {
+      "count": 83,
+      "recovered": 36,
+      "amount_recovered": 101464.0,
+      "at_risk": 416117.0
+    },
+    "CHECKOUT_ABANDONED": {
+      "count": 42,
+      "recovered": 14,
+      "amount_recovered": 38886.0,
+      "at_risk": 195458.0
+    },
+    "SUSPECTED_FRAUD": {
+      "count": 8,
+      "recovered": 0,
+      "amount_recovered": 0.0,
+      "at_risk": 34292.0
+    },
+    "CARD_BLOCKED": {
+      "count": 14,
+      "recovered": 0,
+      "amount_recovered": 0.0,
+      "at_risk": 37186.0
+    }
+  }
+}

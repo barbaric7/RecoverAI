@@ -1,0 +1,7 @@
+.env
+backend/recoverai.db
+backend/__pycache__/
+frontend/node_modules/
+frontend/dist/
+docs/razorpay_proof.json
+data/eval.json
