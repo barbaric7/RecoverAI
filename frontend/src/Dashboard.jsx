@@ -1,196 +1,159 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, inr, inrFull, pct, title } from './api'
-import { Count, Pipeline } from './ui'
+import { api, inrFull, title } from './api'
+import { Badge, Count, act } from './ui'
 
-function Kpi({ label, value, format, sub, tone }) {
-  return (
-    <div className={`card kpi ${tone || ''}`}>
-      <h3>{label}</h3>
-      <div className="value"><Count value={value || 0} format={format} /></div>
-      {sub && <div className="sub">{sub}</div>}
-    </div>
-  )
-}
+const FILTERS = [['', 'All'], ['RECOVERED', 'Recovered'], ['ESCALATED', 'Escalated'], ['UNRESOLVED', 'Unresolved'], ['UNRECOVERABLE', 'No action']]
 
-const STATUS_COLORS = {
-  RECOVERED: 'var(--green)',
-  ESCALATED: 'var(--amber)',
-  UNRESOLVED: '#64748b',
-  UNRECOVERABLE: 'var(--red)',
-}
-
-export default function Dashboard({ metrics, health, running, runState, onRun, onReset, onOpen }) {
-  const m = metrics
-  const [recent, setRecent] = useState([])
+export default function Dashboard({ metrics: m, health, running, runState, onRun, onReset, onOpen }) {
+  const [rows, setRows] = useState([])
   const [filter, setFilter] = useState('')
   const [q, setQ] = useState('')
-
   const seen = useRef(new Set())
+
+  useEffect(() => { if (running) seen.current = new Set() }, [running])
   useEffect(() => {
     let dead = false
     api.cases(filter || undefined).then((r) => {
       if (dead) return
       const items = running ? [...r.items].reverse() : r.items
-      setRecent(items.map((c) => ({ ...c, fresh: running && !seen.current.has(c.payment_id) })))
+      setRows(items.map((c) => ({ ...c, fresh: running && !seen.current.has(c.payment_id) })))
       items.forEach((c) => seen.current.add(c.payment_id))
     })
     return () => { dead = true }
   }, [filter, m?.processed, running])
-  useEffect(() => { if (running) seen.current = new Set() }, [running])
 
   const processed = m?.processed || 0
   const total = m?.total_payments || 0
-  const funnel = [
-    ['Processed', processed, '#60a5fa'],
-    ['Recoverable', m?.recoverable_count, '#a78bfa'],
-    ['Recovered', m?.recovered_count, STATUS_COLORS.RECOVERED],
-    ['Escalated', m?.escalated_count, STATUS_COLORS.ESCALATED],
-    ['Unresolved', m?.unresolved_count, STATUS_COLORS.UNRESOLVED],
-    ['Unrecoverable', m?.unrecoverable_count, STATUS_COLORS.UNRECOVERABLE],
-  ]
-  const icons = { Processed: '▶', Recoverable: '◆', Recovered: '✓', Escalated: '→', Unresolved: '○', Unrecoverable: '!' }
-
-  const shown = recent.filter((c) => !q || c.payment_id.toLowerCase().includes(q.toLowerCase())).slice(0, 60)
-
-  const overrideEntries = Object.entries(m?.policy_override_breakdown || {}).sort((a, b) => b[1] - a[1])
-  const reasonRows = Object.entries(m?.by_failure_reason || {}).sort((a, b) => b[1].at_risk - a[1].at_risk)
+  const shown = rows.filter((c) => !q || c.payment_id.toLowerCase().includes(q.toLowerCase())).slice(0, 80)
+  const overrides = Object.entries(m?.policy_override_breakdown || {}).sort((a, b) => b[1] - a[1])
+  const reasons = Object.entries(m?.by_failure_reason || {}).sort((a, b) => b[1].count - a[1].count)
+  const pctOf = (n, d) => (d ? (100 * n) / d : 0)
 
   return (
     <>
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="flex between">
+      <div className="kpi-row">
+        <div className="kpi">
+          <div className="kpi-label">Revenue at risk</div>
+          <div className="kpi-value"><Count value={m?.at_risk_amount} format={inrFull} /></div>
+          <div className="kpi-sub">{total} failed payments</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Recovered</div>
+          <div className="kpi-value"><Count value={m?.recovered_amount} format={inrFull} /></div>
+          <div className="kpi-sub up">{m?.recovered_count || 0} payments · {(m?.recovery_rate || 0).toFixed(1)}%</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Escalated to review</div>
+          <div className="kpi-value"><Count value={m?.escalated_count} /></div>
+          <div className="kpi-sub">{inrFull(m?.escalated_amount)} routed</div>
+        </div>
+        <div className="kpi">
+          <div className="kpi-label">Policy overrides</div>
+          <div className="kpi-value"><Count value={m?.policy_overrides} /></div>
+          <div className="kpi-sub">blocked or downgraded</div>
+        </div>
+      </div>
+
+      {running && (
+        <div className="progress"><i style={{ width: `${runState?.total ? (100 * runState.done) / runState.total : 0}%` }} /></div>
+      )}
+
+      {processed > 0 && (
+        <div className="two-col">
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700 }}>
-              {total} failed payment events · {inrFull(m?.at_risk_amount)} at risk
-            </div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              Agent brain: {health?.llm_enabled ? <span className="pill llm">LLM · {health.model}</span> : <span className="pill fallback">deterministic fallback (no OPENAI_API_KEY)</span>}
-              {' '}· Provider: <span className="mono">{health?.provider || '…'}</span>
-              {' '}· Loop: Observe → Reason → Policy → Act → Verify → Audit
+            <div className="section-head"><div className="section-title">Outcomes</div><span className="conf">{processed} / {total} processed</span></div>
+            <div className="stat-list">
+              {[
+                ['Recoverable', m.recoverable_count, ''],
+                ['Recovered', m.recovered_count, 'ok'],
+                ['Escalated', m.escalated_count, 'warn'],
+                ['Unresolved', m.unresolved_count, ''],
+                ['No action', m.unrecoverable_count, 'bad'],
+              ].map(([l, n, tone]) => (
+                <div className="stat-row" key={l}>
+                  <span>{l}</span>
+                  <div className="bar"><i className={tone} style={{ width: `${pctOf(n, total)}%` }} /></div>
+                  <span className="n">{n}</span>
+                </div>
+              ))}
             </div>
           </div>
-          <div className="flex">
-            <button className="ghost" onClick={onReset} disabled={running}>Reset</button>
-            <button className="primary" onClick={onRun} disabled={running}>
-              {running ? `Running… ${runState?.done || 0}/${runState?.total || 0}` : processed ? 'Re-run Recovery' : '▶ Run Recovery'}
-            </button>
-          </div>
-        </div>
-        <div style={{ marginTop: 14 }}><Pipeline done={processed ? 5 : -1} labels={{ OBSERVE: 'Payment + history', REASON: 'LLM proposes', POLICY: 'Policy controls', ACT: 'Razorpay (test)', VERIFY: 'Outcome', AUDIT: 'Audit + metrics' }} /></div>
-        {running && (
-          <div className="progress"><i style={{ width: `${runState?.total ? (100 * runState.done) / runState.total : 0}%` }} /></div>
-        )}
-      </div>
-
-      <div className="grid kpis" style={{ marginBottom: 16 }}>
-        <Kpi label="At Risk" value={m?.at_risk_amount} format={inr} sub={`${total} failed payments`} />
-        <Kpi label="Recovered" value={m?.recovered_amount} format={inr} sub={`${m?.recovered_count || 0} payments`} tone="green" />
-        <Kpi label="Recovery Rate" value={m?.recovery_rate} format={pct} sub="recovered ÷ recoverable" tone="blue" />
-        <Kpi label="Decision Accuracy" value={m?.decision_accuracy} format={pct} sub={`vs ground truth · ${m?.policy_overrides || 0} policy overrides`} />
-        <Kpi label="Escalated" value={m?.escalated_count} format={(v) => Math.round(v)} sub={`${inr(m?.escalated_amount)} needs human review`} tone="amber" />
-      </div>
-
-      <div className="grid two" style={{ marginBottom: 16 }}>
-        <div className="card">
-          <h3>{processed} Payments Processed</h3>
-          <div className="funnel">
-            {funnel.map(([label, n, color]) => (
-              <div className="row" key={label}>
-                <span style={{ color }}>{icons[label]}</span>
-                <span>{label}</span>
-                <div className="bar"><i style={{ width: `${total ? (100 * (n || 0)) / total : 0}%`, background: color }} /></div>
-                <span className="n">{n ?? 0}</span>
+          <div>
+            <div className="section-head"><div className="section-title">LLM proposes · policy controls</div><span className="conf">{m.llm_decisions} llm / {m.fallback_decisions} fallback</span></div>
+            <div className="callout-row">
+              <div className="callout">Raw LLM accuracy<div className="big">{m.llm_raw_accuracy.toFixed(1)}%</div>vs ground truth</div>
+              <div className="callout">After policy gate<div className="big ok">{m.decision_accuracy.toFixed(1)}%</div>{m.policy_overrides} overrides</div>
+            </div>
+            {overrides.length > 0 && (
+              <div className="stat-list" style={{ marginTop: 8 }}>
+                {overrides.slice(0, 5).map(([k, v]) => {
+                  const [from, to] = k.split(' → ')
+                  return (
+                    <div className="stat-row" key={k} style={{ gridTemplateColumns: '1fr 56px' }}>
+                      <span className="mono" style={{ fontSize: 12 }}>{act(from)} <span style={{ color: 'var(--text3)' }}>→</span> {act(to)}</span>
+                      <span className="n">{v}</span>
+                    </div>
+                  )
+                })}
               </div>
-            ))}
+            )}
           </div>
-          {processed > 0 && (
-            <div className="muted" style={{ fontSize: 12, marginTop: 12 }}>
-              {m.auto_handled} handled automatically · attempt success {pct(m.attempt_success_rate)} · LLM decisions {m.llm_decisions} / fallback {m.fallback_decisions}
-            </div>
-          )}
         </div>
+      )}
 
-        <div className="card">
-          <h3>LLM proposes · Policy engine controls</h3>
-          {processed === 0 ? (
-            <div className="empty">Run recovery to see policy activity</div>
-          ) : (
-            <>
-              <div className="kv" style={{ marginBottom: 12 }}>
-                <dt>Raw LLM accuracy</dt><dd>{pct(m.llm_raw_accuracy)}</dd>
-                <dt>After policy gate</dt><dd style={{ color: 'var(--green)', fontWeight: 600 }}>{pct(m.decision_accuracy)}</dd>
-                <dt>Actions blocked / downgraded</dt><dd>{m.policy_overrides}</dd>
-              </div>
-              {overrideEntries.length > 0 ? (
-                <table>
-                  <thead><tr><th>Override</th><th className="num">Count</th></tr></thead>
-                  <tbody>
-                    {overrideEntries.map(([k, v]) => (
-                      <tr key={k}><td className="mono">{k}</td><td className="num">{v}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : (
-                <div className="banner ok">Every LLM recommendation stayed within policy on this run.</div>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
-      {reasonRows.length > 0 && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <h3>Recovery by failure reason</h3>
-          <div className="bars">
-            {reasonRows.map(([r, v]) => (
-              <div className="row" key={r}>
-                <span>{title(r)} <span className="tag">({v.count})</span></span>
-                <div className="bar"><i style={{ width: `${v.count ? (100 * v.recovered) / v.count : 0}%` }} /></div>
-                <span className="right mono">{v.recovered}/{v.count} · {inr(v.amount_recovered)}</span>
+      {reasons.length > 0 && (
+        <div style={{ marginBottom: 28 }}>
+          <div className="section-head"><div className="section-title">Recovery by failure reason</div></div>
+          <div className="stat-list">
+            {reasons.map(([r, v]) => (
+              <div className="stat-row" key={r} style={{ gridTemplateColumns: '170px 1fr 150px' }}>
+                <span>{title(r)} <span style={{ color: 'var(--text3)' }}>· {v.count}</span></span>
+                <div className="bar"><i className="ok" style={{ width: `${pctOf(v.recovered, v.count)}%` }} /></div>
+                <span className="n">{v.recovered}/{v.count} · {inrFull(v.amount_recovered)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      <div className="card">
-        <div className="flex between" style={{ marginBottom: 12 }}>
-          <h3 style={{ margin: 0 }}>Agent decisions {running && <span className="live" style={{ marginLeft: 8 }}>LIVE · streaming</span>}</h3>
-          <div className="flex filters">
-            <input className="search" style={{ width: 160 }} placeholder="Find P0042…" value={q} onChange={(e) => setQ(e.target.value)} />
-            {['', 'RECOVERED', 'ESCALATED', 'UNRESOLVED', 'UNRECOVERABLE'].map((s) => (
-              <button key={s} className={filter === s ? 'active' : ''} onClick={() => setFilter(s)}>{s || 'All'}</button>
-            ))}
-          </div>
+      <div className="section-head">
+        <div className="section-title">Decisions {running && <span className="live">live · {runState?.done}/{runState?.total}</span>}</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {processed > 0 && (
+            <div className="filters" style={{ marginRight: 8 }}>
+              <input className="search" placeholder="P0042" value={q} onChange={(e) => setQ(e.target.value)} />
+              {FILTERS.map(([v, l]) => <button key={v} className={`chip ${filter === v ? 'active' : ''}`} onClick={() => setFilter(v)}>{l}</button>)}
+            </div>
+          )}
+          <button className="btn-ghost" onClick={onReset} disabled={running}>Reset run</button>
+          <button className="btn" onClick={onRun} disabled={running}>{running ? 'Running…' : 'Run recovery'}</button>
         </div>
-        {shown.length === 0 ? (
-          <div className="empty">{processed ? 'No cases match' : 'No decisions yet — click Run Recovery'}</div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Payment</th><th className="num">Amount</th><th>Failure</th><th>LLM proposed</th><th>Policy</th><th>Executed</th><th className="num">Conf.</th><th>Status</th><th className="num">Recovered</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((c) => (
-                <tr key={c.payment_id} className={`click ${c.fresh ? 'fresh' : ''}`} onClick={() => onOpen(c.payment_id)}>
-                  <td className="mono">{c.payment_id}</td>
-                  <td className="num money">{inrFull(c.amount)}</td>
-                  <td>{title(c.failure_reason)}</td>
-                  <td><span className="pill action">{c.recommended_action}</span></td>
-                  <td>{c.policy_allowed ? <span style={{ color: 'var(--green)' }}>✓ allowed</span> : <span style={{ color: 'var(--amber)' }}>⛔ overridden</span>}</td>
-                  <td><span className="pill action">{c.final_action}</span></td>
-                  <td className="num">{Math.round(c.confidence * 100)}%</td>
-                  <td><span className={`pill ${c.status}`}>{c.status}</span></td>
-                  <td className="num money" style={{ color: c.amount_recovered ? 'var(--green)' : 'var(--muted)' }}>{c.amount_recovered ? inrFull(c.amount_recovered) : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        {recent.length > 60 && <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>Showing 60 of {recent.length}. Use search to find a specific payment.</div>}
       </div>
+
+      {shown.length === 0 ? (
+        <div className="empty">{processed ? 'No decisions match.' : `${total} failed payments · ${inrFull(m?.at_risk_amount)} at risk. Run recovery to start the agent.`}</div>
+      ) : (
+        <table>
+          <thead>
+            <tr><th>Payment</th><th>Amount</th><th>Failure reason</th><th>Confidence</th><th>Recommended</th><th>Final action</th><th>Outcome</th><th style={{ textAlign: 'right' }}>Recovered</th></tr>
+          </thead>
+          <tbody>
+            {shown.map((c) => (
+              <tr key={c.payment_id} className={c.fresh ? 'fresh' : ''} onClick={() => onOpen(c.payment_id)}>
+                <td className="id">{c.payment_id}</td>
+                <td className="amt">{inrFull(c.amount)}</td>
+                <td>{c.failure_reason === 'PAYMENT_TIMEOUT' && c.final_action === 'MARK_UNRECOVERABLE' ? 'Stale event' : title(c.failure_reason)}</td>
+                <td className="conf">{c.confidence.toFixed(2)}</td>
+                <td>{act(c.recommended_action)}</td>
+                <td className={c.policy_allowed ? '' : 'overridden'}>{c.policy_allowed ? act(c.final_action) : (c.final_action === 'MARK_UNRECOVERABLE' ? 'Blocked' : act(c.final_action))}</td>
+                <td><Badge status={c.status} /></td>
+                <td className={`amt ${c.amount_recovered ? 'up' : ''}`} style={{ textAlign: 'right', color: c.amount_recovered ? undefined : 'var(--text3)' }}>{c.amount_recovered ? inrFull(c.amount_recovered) : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {rows.length > 80 && <div className="note">Showing 80 of {rows.length}. Filter or search by payment id.</div>}
     </>
   )
 }

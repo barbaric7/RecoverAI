@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api'
+import { Stepper } from './ui'
 import Dashboard from './Dashboard'
 import PaymentDetails from './PaymentDetails'
 import AuditTrail from './AuditTrail'
 
 export default function App() {
-  const [view, setView] = useState('overview') // overview | payment | audit
+  const [view, setView] = useState('dash')
   const [paymentId, setPaymentId] = useState(null)
   const [auditId, setAuditId] = useState('')
   const [metrics, setMetrics] = useState(null)
   const [health, setHealth] = useState(null)
   const [runState, setRunState] = useState(null)
   const [error, setError] = useState(null)
+  const [detailStep, setDetailStep] = useState({ active: 5 })
   const timer = useRef(null)
 
   const refresh = useCallback(async () => {
@@ -22,19 +24,10 @@ export default function App() {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
-
-  // poll while a batch is running
   useEffect(() => {
-    const tick = async () => {
-      try {
-        const s = await api.status()
-        setRunState(s)
-        if (s.running) { await refresh() } else if (timer.current) { clearInterval(timer.current); timer.current = null; await refresh() }
-      } catch { /* ignore */ }
-    }
-    tick()
+    api.status().then((s) => { setRunState(s); if (s.running) startPolling() }).catch(() => {})
     return () => timer.current && clearInterval(timer.current)
-  }, [refresh])
+  }, [])
 
   const startPolling = () => {
     if (timer.current) return
@@ -44,49 +37,65 @@ export default function App() {
       setRunState(s)
       await refresh()
       if (!s.running) { clearInterval(timer.current); timer.current = null }
-    }, 800)
+    }, 700)
   }
 
   const run = async () => {
-    try { await api.runBatch(); setRunState({ running: true, done: 0, total: metrics?.total_payments }); startPolling() } catch (e) { setError(e.message) }
+    try { await api.runBatch({ llm_sample: health?.llm_sample ?? undefined }); setRunState({ running: true, done: 0, total: metrics?.total_payments }); startPolling() } catch (e) { setError(e.message) }
   }
   const reset = async () => { await api.reset(); refresh() }
-
-  const openPayment = (id) => { setPaymentId(id); setView('payment') }
+  const openPayment = (id) => { setPaymentId(id); setView('detail') }
   const openAudit = (id) => { setAuditId(id || ''); setView('audit') }
+
+  const running = !!runState?.running
+  const processed = metrics?.processed || 0
+  // stepper state per screen
+  const stepper = view === 'dash'
+    ? { active: running ? 3 : processed ? 5 : 0 }
+    : view === 'detail' ? detailStep : { active: 5 }
+
+  const providerLabel = health?.provider === 'razorpay' ? 'rzp_test' : 'rzp_test · simulated'
 
   return (
     <div className="app">
-      <header className="topbar">
+      <div className="topbar">
         <div className="brand">
-          <div className="logo">R</div>
-          <div>
-            <h1>RecoverAI</h1>
-            <p>Autonomous Revenue Recovery Agent</p>
-          </div>
+          <div className="brand-mark" />
+          <div className="brand-name">RecoverAI</div>
+          <div className="brand-tag">Payment recovery agent</div>
         </div>
-        <nav>
-          <button className={view === 'overview' ? 'active' : ''} onClick={() => setView('overview')}>Overview</button>
-          <button className={view === 'payment' ? 'active' : ''} onClick={() => paymentId ? setView('payment') : openPayment('P0042')}>Agent Decision</button>
-          <button className={view === 'audit' ? 'active' : ''} onClick={() => setView('audit')}>Audit Trail</button>
-        </nav>
-      </header>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <div className="nav-tabs">
+            <button className={`nav-tab ${view === 'dash' ? 'active' : ''}`} onClick={() => setView('dash')}>Overview</button>
+            <button className={`nav-tab ${view === 'detail' ? 'active' : ''}`} onClick={() => (paymentId ? setView('detail') : openPayment('P0099'))}>Payment</button>
+            <button className={`nav-tab ${view === 'audit' ? 'active' : ''}`} onClick={() => setView('audit')}>Audit trail</button>
+          </div>
+          <span className={`env-pill ${health?.llm_enabled ? '' : 'muted'}`} title={health?.llm_enabled ? health.model : 'deterministic fallback'}>
+            {health?.llm_enabled ? (health.model || '').replace('openai/', '') : 'fallback'}
+          </span>
+          <span className="env-pill">{providerLabel}</span>
+        </div>
+      </div>
 
-      {error && <div className="banner bad" style={{ marginBottom: 16 }}>{error}</div>}
+      <Stepper active={stepper.active} blocked={stepper.blocked} policyIdx={stepper.policyIdx} />
 
-      {view === 'overview' && (
-        <Dashboard metrics={metrics} health={health} running={!!runState?.running} runState={runState} onRun={run} onReset={reset} onOpen={openPayment} />
-      )}
-      {view === 'payment' && paymentId && (
-        <PaymentDetails paymentId={paymentId} onBack={() => setView('overview')} onAudit={openAudit} onChanged={refresh} />
-      )}
-      {view === 'audit' && (
-        <AuditTrail paymentId={auditId} onPick={setAuditId} onOpenPayment={openPayment} />
-      )}
+      {error && <div className="banner-error">{error}</div>}
 
-      <div className="footer-note">
-        The LLM recommends actions — it never has unrestricted access to money movement. Every action passes a deterministic policy gate first.
-        {' '}Demo cases: <a href="#" onClick={(e) => { e.preventDefault(); openPayment('P0042') }}>P0042 retry</a> · <a href="#" onClick={(e) => { e.preventDefault(); openPayment('P0003') }}>P0003 payment link</a> · <a href="#" onClick={(e) => { e.preventDefault(); openPayment('P0099') }}>P0099 escalation</a> · <a href="#" onClick={(e) => { e.preventDefault(); openPayment('P0117') }}>P0117 failed retry</a> · <a href="#" onClick={(e) => { e.preventDefault(); openPayment('P0210') }}>P0210 stale event</a>
+      {view === 'dash' && (
+        <Dashboard metrics={metrics} health={health} running={running} runState={runState} onRun={run} onReset={reset} onOpen={openPayment} />
+      )}
+      {view === 'detail' && paymentId && (
+        <PaymentDetails paymentId={paymentId} onBack={() => setView('dash')} onAudit={openAudit} onChanged={refresh} setStep={setDetailStep} />
+      )}
+      {view === 'audit' && <AuditTrail paymentId={auditId} onPick={setAuditId} onOpenPayment={openPayment} />}
+
+      <div className="footer">
+        <span>LLM proposes · policy engine controls · every step logged before execution.</span>
+        <span>
+          {[['P0042', 'retry'], ['P0003', 'link'], ['P0099', 'escalate'], ['P0117', 'failed'], ['P0210', 'stale']].map(([id, l]) => (
+            <a key={id} href="#" onClick={(e) => { e.preventDefault(); openPayment(id) }} style={{ marginLeft: 14 }}>{id} <span style={{ color: 'var(--text3)' }}>{l}</span></a>
+          ))}
+        </span>
       </div>
     </div>
   )

@@ -16,6 +16,7 @@ export const api = {
     const q = new URLSearchParams()
     if (opts.limit) q.set('limit', opts.limit)
     if (opts.use_llm !== undefined) q.set('use_llm', opts.use_llm)
+    if (opts.llm_sample != null) q.set('llm_sample', opts.llm_sample)
     return fetch(`${BASE}/api/agent/recover?${q}`, { method: 'POST' }).then(j)
   },
   runOne: (id) => fetch(`${BASE}/api/agent/recover/${id}`, { method: 'POST' }).then(j),

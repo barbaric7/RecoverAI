@@ -55,6 +55,8 @@ def health():
         "model": agent.OPENAI_MODEL if agent.LLM_ENABLED else None,
         "provider": os.environ.get("RECOVERAI_PROVIDER", "simulated"),
         "payments": db.count_payments(),
+        "llm_sample": int(os.environ["LLM_SAMPLE"]) if os.environ.get("LLM_SAMPLE") else None,
+        "breaker": agent.breaker_state(),
     }
 
 
@@ -110,11 +112,14 @@ def recover_one(payment_id: str, use_llm: Optional[bool] = None):
     return case
 
 
-def _batch(ids, use_llm: Optional[bool], workers: int):
+DEMO_IDS = ["P0042", "P0003", "P0099", "P0117", "P0210"]
+
+
+def _batch(ids, use_llm: Optional[bool], workers: int, llm_ids: Optional[set] = None):
     _run_state.update({"running": True, "done": 0, "total": len(ids), "started_at": time.time(), "finished_at": None, "error": None})
     try:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futs = [ex.submit(run_case, pid, use_llm) for pid in ids]
+            futs = [ex.submit(run_case, pid, (pid in llm_ids) if llm_ids is not None else use_llm) for pid in ids]
             for _ in as_completed(futs):
                 _run_state["done"] += 1
     except Exception as exc:  # noqa: BLE001
@@ -126,8 +131,14 @@ def _batch(ids, use_llm: Optional[bool], workers: int):
 
 
 @app.post("/api/agent/recover")
-def recover_batch(limit: Optional[int] = None, use_llm: Optional[bool] = None, reset: bool = True, workers: int = 8):
-    """Run the recovery loop over all pending payments (background)."""
+def recover_batch(limit: Optional[int] = None, use_llm: Optional[bool] = None, reset: bool = True, workers: int = 8,
+                  llm_sample: Optional[int] = None):
+    """Run the recovery loop over all pending payments (background).
+
+    llm_sample=N → hybrid mode: the LLM decides the demo cases + the first N-5 pending payments;
+    the deterministic fallback handles the rest. Useful on tight API budgets. Every decision is
+    tagged with its source (llm | fallback) so metrics stay honest.
+    """
     if _run_state["running"]:
         raise HTTPException(409, "a batch run is already in progress")
     if reset:
@@ -138,7 +149,8 @@ def recover_batch(limit: Optional[int] = None, use_llm: Optional[bool] = None, r
     if not ids:
         return {"started": False, "message": "no pending payments", **_run_state}
     effective_llm = agent.LLM_ENABLED if use_llm is None else use_llm
-    workers = max(1, min(workers, 16 if effective_llm else 4))
+    # In LLM mode, don't outrun the LLM concurrency cap (see agent.LLM_CONCURRENCY)
+    workers = max(1, min(workers, agent.LLM_CONCURRENCY * 2 if effective_llm else 4))
     threading.Thread(target=_batch, args=(ids, use_llm, workers), daemon=True).start()
     return {"started": True, "total": len(ids), "llm": effective_llm}
 

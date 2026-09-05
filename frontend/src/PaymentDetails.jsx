@@ -1,8 +1,23 @@
 import { useEffect, useState } from 'react'
 import { api, inrFull, title } from './api'
-import { Pipeline } from './ui'
+import { Badge, act } from './ui'
 
-export default function PaymentDetails({ paymentId, onBack, onAudit, onChanged }) {
+const CHECK_LABEL = {
+  no_prior_success: ['Not already paid', 'Already paid — no action allowed'],
+  amount_limit: ['Below ₹10,000 limit', 'Above ₹10,000 auto limit'],
+  confidence_threshold: ['Confidence ≥ 0.55', 'Confidence below 0.55 threshold'],
+  not_high_risk: ['Not suspected fraud', 'Fraud / blocked-card signal'],
+  recovery_budget: ['Recovery budget remaining', 'Recovery budget exhausted'],
+  retry_limit: ['Within retry limit', 'Retry limit exceeded'],
+  retryable_failure_type: ['Failure type is retryable', 'Failure type not retryable'],
+  customer_eligible: ['Customer history eligible', 'Weak customer history'],
+  freshness: ['Within 7-day window', 'Failure older than 7 days'],
+  not_premature_giveup: ['Write-off justified', 'Write-off looks premature'],
+  escalation_always_allowed: ['Escalation always permitted', ''],
+}
+const ago = (d) => (d < 1 ? `${Math.max(1, Math.round(d * 24))}h ago` : `${Math.round(d)} day${Math.round(d) === 1 ? '' : 's'} ago`)
+
+export default function PaymentDetails({ paymentId, onBack, onAudit, onChanged, setStep }) {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(null)
@@ -10,140 +25,138 @@ export default function PaymentDetails({ paymentId, onBack, onAudit, onChanged }
   const load = () => api.payment(paymentId).then(setData).catch((e) => setErr(String(e)))
   useEffect(() => { setData(null); load() }, [paymentId])
 
+  const c = data?.case
+  useEffect(() => {
+    if (!data) return
+    if (!c) setStep({ active: 0 })
+    else setStep({ active: 5, blocked: !c.policy.allowed, policyIdx: 2 })
+  }, [data])
+
   const run = async () => {
     setBusy(true)
     try { await api.runOne(paymentId); await load(); onChanged?.() } catch (e) { setErr(String(e)) } finally { setBusy(false) }
   }
 
-  if (err) return <div className="banner bad">{err}</div>
+  if (err) return <div className="banner-error">{err}</div>
   if (!data) return <div className="empty">Loading…</div>
 
   const p = data.payment
-  const c = data.case
-  const d = c?.decision
-  const pol = c?.policy
-  const ex = c?.execution
+  const d = c?.decision, pol = c?.policy, ex = c?.execution
   const status = c?.status || 'PENDING'
-  const succ = Math.round(p.customer_success_rate * p.previous_payments)
-
-  const done = !c ? 0 : 5
   const blocked = !!pol && !pol.allowed
+  const attemptsTxt = `${p.attempt_count + (ex && ['RETRY_PAYMENT', 'WAIT_AND_RETRY'].includes(ex.action) ? 1 : 0)} of 2 allowed`
+
+  const resultTone = status === 'RECOVERED' ? '' : status === 'UNRESOLVED' ? 'bad' : status === 'ESCALATED' ? 'warn' : 'neutral'
+  const resultText = {
+    RECOVERED: inrFull(ex?.amount_recovered) + ' recovered',
+    ESCALATED: 'Escalated',
+    UNRESOLVED: 'Not recovered',
+    UNRECOVERABLE: 'No action',
+  }[status] || '—'
 
   return (
     <>
-      <div className="flex between" style={{ marginBottom: 12 }}>
-        <div className="flex">
-          <button className="ghost" onClick={onBack}>← Back</button>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 700 }} className="mono">PAYMENT {p.payment_id}</div>
-            <div className="muted" style={{ fontSize: 12 }}>Customer {p.customer_id} · {p.currency}</div>
+      <button className="back" onClick={onBack}>← Overview</button>
+      <div className="detail-head">
+        <div>
+          <div className="detail-title mono">{p.payment_id} <Badge status={status} /></div>
+          <div className="detail-sub">
+            Failed <span className="mono">{ago(p.days_since_failure)}</span> · Customer history <span className="mono">{Math.round(p.customer_success_rate * 100)}%</span> ({p.previous_payments} payments) · Attempt <span className="mono">{attemptsTxt}</span>
+            {p.subscription_status !== 'NONE' && <> · Subscription <span className="mono">{p.subscription_status.toLowerCase()}</span></>}
           </div>
         </div>
-        <div className="flex">
-          <span className={`pill ${status}`}>{status}</span>
-          <button onClick={() => onAudit(p.payment_id)} disabled={!c}>Audit trail</button>
-          <button className="primary" onClick={run} disabled={busy}>{busy ? 'Running…' : c ? 'Re-run agent' : '▶ Run agent on this payment'}</button>
+        <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
+          <div>
+            <div className="amount-label">Amount</div>
+            <div className="amount-big">{inrFull(p.amount)}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-ghost" onClick={() => onAudit(p.payment_id)} disabled={!c}>Audit trail</button>
+            <button className="btn" onClick={run} disabled={busy}>{busy ? 'Running…' : c ? 'Re-run agent' : 'Run agent'}</button>
+          </div>
         </div>
       </div>
 
-      <Pipeline done={done} blockedAtPolicy={blocked} />
+      <div className="rail">
+        <div className="rail-items">
 
-      <div className="detail-grid">
-        <div className="card">
-          <h3>Failed payment</h3>
-          <div className="big">{inrFull(p.amount)}</div>
-          <dl className="kv" style={{ marginTop: 10 }}>
-            <dt>Failure</dt><dd>{title(p.failure_reason)}<div className="muted" style={{ fontSize: 12 }}>{p.failure_message}</div></dd>
-            <dt>Attempts so far</dt><dd>{p.attempt_count}</dd>
-            <dt>Prev. recovery attempts</dt><dd>{p.previous_recovery_attempts}</dd>
-            <dt>Time since failure</dt><dd>{p.days_since_failure < 1 ? `${Math.round(p.days_since_failure * 24)}h` : `${p.days_since_failure}d`}</dd>
-            <dt>Subscription</dt><dd>{title(p.subscription_status)}</dd>
-            {p.payment_already_succeeded && <><dt>⚠ Stale event</dt><dd style={{ color: 'var(--amber)' }}>Payment already succeeded</dd></>}
-          </dl>
-          <h3 style={{ marginTop: 18 }}>Customer history</h3>
-          <dl className="kv">
-            <dt>Previous payments</dt><dd>{p.previous_payments}</dd>
-            <dt>Successful</dt><dd>{succ} ({Math.round(p.customer_success_rate * 100)}%)</dd>
-          </dl>
-        </div>
-
-        <div className="card ai">
-          <h3>AI diagnosis {d && <span className={`pill ${d.source}`} style={{ marginLeft: 6 }}>{d.source === 'llm' ? 'LLM' : 'fallback'}</span>}</h3>
-          {!d ? (
-            <div className="empty">Not analysed yet</div>
-          ) : (
-            <>
-              <div style={{ fontSize: 15, marginBottom: 12 }}>{d.diagnosis}</div>
-              <dl className="kv">
-                <dt>Recoverable</dt><dd>{d.recoverable ? 'Yes' : 'No'}</dd>
-                <dt>Confidence</dt>
-                <dd>
-                  <div className="flex"><span style={{ width: 40 }}>{Math.round(d.confidence * 100)}%</span><div className="conf" style={{ flex: 1 }}><i style={{ width: `${d.confidence * 100}%` }} /></div></div>
-                </dd>
-                <dt>Expected recovery</dt><dd>{inrFull(d.expected_recovery)}</dd>
-                <dt>Recommended action</dt><dd><span className="pill action">{d.recommended_action}</span></dd>
-                <dt>Reason</dt><dd>{d.reason}</dd>
-              </dl>
-              {d.policy_checks?.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  <div className="tag" style={{ marginBottom: 4 }}>Rules the agent says it considered</div>
-                  <ul className="muted" style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
-                    {d.policy_checks.map((x, i) => <li key={i}>{x}</li>)}
-                  </ul>
-                </div>
-              )}
-            </>
-          )}
-        </div>
-
-        <div className={`card policy ${blocked ? 'blocked' : ''}`}>
-          <h3>Policy engine <span className="tag" style={{ textTransform: 'none', letterSpacing: 0 }}>· deterministic · runs before any money moves</span></h3>
-          {!pol ? (
-            <div className="empty">—</div>
-          ) : (
-            <>
-              {pol.allowed ? (
-                <div className="banner ok animate" style={{ marginBottom: 10, animationDelay: `${(pol.checks.length) * 120}ms` }}>✓ Policy validation passed — <b>{pol.final_action}</b> approved</div>
-              ) : (
-                <div className="banner warn animate" style={{ marginBottom: 10, animationDelay: `${(pol.checks.length) * 120}ms` }}>
-                  ⛔ <b>{d.recommended_action}</b> blocked → executing <b>{pol.final_action}</b>
-                  <div style={{ marginTop: 4, fontSize: 12 }}>{pol.override_reason}</div>
-                </div>
-              )}
-              {pol.checks.map((ch, i) => (
-                <div key={ch.name} className={`check ${ch.passed ? 'ok' : 'bad'}`} style={{ animationDelay: `${i * 120}ms` }}>
-                  <span className="icon">{ch.passed ? '✓' : '✕'}</span>
-                  <div>
-                    <div className="name">{ch.name}</div>
-                    <div className="d">{ch.detail}</div>
-                  </div>
-                </div>
-              ))}
-            </>
-          )}
-        </div>
-
-        <div className={`card result ${status === 'RECOVERED' ? 'ok' : ''}`}>
-          <h3>Action & result</h3>
-          {!ex ? (
-            <div className="empty">—</div>
-          ) : (
-            <>
-              <div className="banner info animate" style={{ marginBottom: 10 }}>
-                <b>[ {ex.action.replaceAll('_', ' ')} {ex.executed ? 'EXECUTED' : 'SKIPPED'} ]</b>
-                <div style={{ fontSize: 12, marginTop: 4 }}>via <span className="mono">{ex.provider}</span>{ex.reference && <> · ref <span className="mono">{ex.reference}</span></>}</div>
+          <div className="rail-item">
+            <div className="rail-node done">✓</div>
+            <div className="rail-card">
+              <div className="rail-kicker">Failure</div>
+              <div className="rail-body">
+                {p.failure_message}. <strong>{title(p.failure_reason)}</strong>
+                {p.attempt_count > 0 && <> after {p.attempt_count} prior attempt{p.attempt_count > 1 ? 's' : ''}</>}
+                {p.previous_recovery_attempts > 0 && <>, {p.previous_recovery_attempts} previous recovery attempt{p.previous_recovery_attempts > 1 ? 's' : ''}</>}.
+                {p.payment_already_succeeded && <> <strong style={{ color: 'var(--danger)' }}>Stale event — payment already succeeded.</strong></>}
               </div>
-              <dl className="kv">
-                <dt>Outcome</dt><dd><span className={`pill ${status}`}>{ex.outcome}</span></dd>
-                <dt>Detail</dt><dd>{ex.detail}</dd>
-                <dt>Decision vs truth</dt><dd>{c.decision_correct ? <span style={{ color: 'var(--green)' }}>✓ matches ground truth ({p.ground_truth_action})</span> : <span style={{ color: 'var(--amber)' }}>differs (truth: {p.ground_truth_action})</span>}</dd>
-              </dl>
-              {status === 'RECOVERED' && <div className="big recovered-flash" style={{ color: 'var(--green)', marginTop: 12 }}>✓ {inrFull(ex.amount_recovered)} recovered</div>}
-              {status === 'ESCALATED' && <div className="big" style={{ color: 'var(--amber)', marginTop: 12, fontSize: 18 }}>→ Human review required</div>}
-              {status === 'UNRESOLVED' && <div className="big" style={{ color: '#cbd5e1', marginTop: 12, fontSize: 18 }}>○ Not recovered — {p.attempt_count + 1 >= 2 ? 'retry budget exhausted; next failure escalates' : 'eligible for one more automated attempt'}</div>}
-              {status === 'UNRECOVERABLE' && <div className="big" style={{ color: 'var(--red)', marginTop: 12, fontSize: 18 }}>! Stopped — no further automated action</div>}
-            </>
-          )}
+              <div className="rail-meta">
+                <span>Customer <span className="mono">{p.customer_id}</span></span>
+                <span>Success rate <span className="mono">{Math.round(p.customer_success_rate * 100)}%</span></span>
+                <span>Previous payments <span className="mono">{p.previous_payments}</span></span>
+              </div>
+            </div>
+          </div>
+
+          <div className="rail-item">
+            <div className={`rail-node accent ${d ? '' : 'pending'}`}>AI</div>
+            <div className="rail-card">
+              <div className="rail-kicker">Reasoning {d && <span className="mono" style={{ color: d.source === 'llm' ? 'var(--accent)' : 'var(--text3)' }}>{d.source === 'llm' ? 'gpt-4.1' : 'fallback'}</span>}</div>
+              {!d ? <div className="rail-body muted">Not analysed yet.</div> : (
+                <div className="rail-body">
+                  Recommends <strong>{act(d.recommended_action).toLowerCase()}</strong> — {d.reason.replace(/\.$/, '')}. <span className="conf">Confidence {d.confidence.toFixed(2)}</span>
+                  <div style={{ marginTop: 8, color: 'var(--text3)', fontSize: 12.5 }}>{d.diagnosis}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rail-item">
+            <div className={`rail-node ${!pol ? 'pending' : blocked ? 'bad' : 'ok'}`}>{!pol ? '' : blocked ? '✕' : '✓'}</div>
+            <div className="rail-card">
+              <div className="rail-kicker">Policy gate</div>
+              {!pol ? <div className="rail-body muted">Waiting for recommendation.</div> : (
+                <>
+                  <div className="rail-body">
+                    {blocked
+                      ? <>Recommendation {pol.final_action === 'ESCALATE_TO_HUMAN' || pol.final_action === 'MARK_UNRECOVERABLE' ? 'blocked' : 'downgraded'} — <strong>{act(pol.final_action).toLowerCase()}</strong> instead of {act(d.recommended_action).toLowerCase()}. <span className="muted">{pol.override_reason}</span></>
+                      : (() => { const f = pol.checks.filter((x) => !x.passed).length; return <>{pol.checks.length - f} of {pol.checks.length} checks passed{f > 0 && <span className="muted"> ({f} automation gate{f > 1 ? 's' : ''} closed)</span>} — <strong>{act(pol.final_action).toLowerCase()}</strong> approved.</> })()}
+                  </div>
+                  <div className="policy-grid">
+                    {pol.checks.map((ch, i) => {
+                      const [okL, badL] = CHECK_LABEL[ch.name] || [ch.name, ch.name]
+                      return (
+                        <div className="policy-check" key={ch.name} style={{ animationDelay: `${i * 70}ms` }} title={ch.detail}>
+                          <div className={`pc-icon ${ch.passed ? 'pass' : 'fail'}`}>{ch.passed ? '✓' : '✕'}</div>
+                          <div className={`pc-label ${ch.passed ? '' : 'fail-text'}`}>{ch.passed ? okL : badL}<span className="pc-sub">{ch.detail}</span></div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="rail-item">
+            <div className={`rail-node ${!ex ? 'pending' : status === 'RECOVERED' ? 'ok' : 'done'}`}>{!ex ? '' : status === 'RECOVERED' ? '✓' : '→'}</div>
+            <div className="rail-card">
+              <div className="rail-kicker">Action & result</div>
+              {!ex ? <div className="rail-body muted">—</div> : (
+                <div className="result-row">
+                  <div className="rail-body">
+                    {status === 'ESCALATED' && <>Routed to <strong>human review</strong> queue.</>}
+                    {status === 'RECOVERED' && <><strong>{act(ex.action)}</strong> executed via <span className="mono">{ex.provider}</span> — {ex.detail}.</>}
+                    {status === 'UNRESOLVED' && <><strong>{act(ex.action)}</strong> executed via <span className="mono">{ex.provider}</span> — {ex.detail}. {p.attempt_count + 1 >= 2 ? 'Retry budget exhausted; next failure escalates.' : 'One automated attempt remains.'}</>}
+                    {status === 'UNRECOVERABLE' && <>No action taken. {p.payment_already_succeeded ? 'Any retry would risk a double charge.' : ex.detail}</>}
+                    {ex.reference && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text3)' }}>ref <span className="mono">{ex.reference}</span> · truth: {act(p.ground_truth_action)} {c.decision_correct ? '✓' : '≠'}</div>}
+                  </div>
+                  <div className={`result-amt ${resultTone}`}>{resultText}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
         </div>
       </div>
     </>

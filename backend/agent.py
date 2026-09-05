@@ -15,14 +15,55 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
+import threading
+import time
 from typing import Optional
 
 from models import Action, AgentDecision, FailureReason, Payment
 
 log = logging.getLogger("recoverai.agent")
 
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
-LLM_ENABLED = bool(os.environ.get("OPENAI_API_KEY")) and os.environ.get("RECOVERAI_USE_LLM", "1") != "0"
+_KEY = os.environ.get("OPENAI_API_KEY", "")
+_IS_OPENROUTER = _KEY.startswith("sk-or-")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL") or ("https://openrouter.ai/api/v1" if _IS_OPENROUTER else None)
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL") or ("openai/gpt-4.1" if _IS_OPENROUTER else "gpt-4o-mini")
+LLM_ENABLED = bool(_KEY) and os.environ.get("RECOVERAI_USE_LLM", "1") != "0"
+# Cap concurrent LLM calls (OpenRouter free-tier budgets reject parallel in-flight requests)
+LLM_CONCURRENCY = int(os.environ.get("LLM_CONCURRENCY", "2" if _IS_OPENROUTER else "8"))
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+_sem = threading.BoundedSemaphore(LLM_CONCURRENCY)
+
+# Circuit breaker: after N consecutive budget/auth failures, stop calling the LLM for a cool-down
+# window so a dead API key degrades to the fallback instantly instead of stalling the batch.
+_BREAKER_THRESHOLD = int(os.environ.get("LLM_BREAKER_THRESHOLD", "3"))
+_BREAKER_COOLDOWN = float(os.environ.get("LLM_BREAKER_COOLDOWN", "120"))
+_breaker = {"failures": 0, "open_until": 0.0}
+_breaker_lock = threading.Lock()
+
+
+def breaker_state() -> dict:
+    with _breaker_lock:
+        return {"open": time.time() < _breaker["open_until"], "consecutive_failures": _breaker["failures"],
+                "open_until": _breaker["open_until"]}
+
+
+def _breaker_open() -> bool:
+    with _breaker_lock:
+        return time.time() < _breaker["open_until"]
+
+
+def _breaker_record(success: bool, hard: bool) -> None:
+    with _breaker_lock:
+        if success:
+            _breaker["failures"] = 0
+            return
+        if hard:
+            _breaker["failures"] += 1
+            if _breaker["failures"] >= _BREAKER_THRESHOLD:
+                _breaker["open_until"] = time.time() + _BREAKER_COOLDOWN
+                log.warning("LLM circuit breaker OPEN for %.0fs after %d consecutive budget/auth failures; using fallback",
+                            _BREAKER_COOLDOWN, _breaker["failures"])
 
 SYSTEM_PROMPT = """You are RecoverAI, an autonomous revenue recovery agent for a merchant payment system.
 
@@ -196,35 +237,67 @@ def _get_client():
     if _client is None:
         from openai import OpenAI  # imported lazily so the app runs without the package
 
-        _client = OpenAI()
+        kw = {"api_key": _KEY}
+        if OPENAI_BASE_URL:
+            kw["base_url"] = OPENAI_BASE_URL
+            kw["default_headers"] = {"HTTP-Referer": "https://github.com/recoverai", "X-Title": "RecoverAI"}
+        _client = OpenAI(**kw)
     return _client
 
 
+def _call_llm(ctx: dict) -> str:
+    client = _get_client()
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0,
+        max_tokens=400,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": "Failed payment case:\n" + json.dumps(ctx, indent=2)},
+        ],
+        timeout=30,
+    )
+    return resp.choices[0].message.content or "{}"
+
+
 def llm_decision(p: Payment) -> Optional[AgentDecision]:
-    ctx = build_context(p)
-    try:
-        client = _get_client()
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            temperature=0,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": "Failed payment case:\n" + json.dumps(ctx, indent=2)},
-            ],
-            timeout=30,
-        )
-        raw = resp.choices[0].message.content or "{}"
-        data = json.loads(raw)
-        data["payment_id"] = p.payment_id  # never trust the model to echo ids
-        data.setdefault("policy_checks", [])
-        data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
-        data["expected_recovery"] = max(0.0, float(data.get("expected_recovery", 0.0)))
-        data["source"] = "llm"
-        return AgentDecision(**data)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("LLM decision failed for %s: %s", p.payment_id, exc)
+    if _breaker_open():
         return None
+    ctx = build_context(p)
+    last_exc: Exception | None = None
+    for attempt in range(LLM_MAX_RETRIES + 1):
+        try:
+            with _sem:
+                raw = _call_llm(ctx)
+            _breaker_record(True, False)
+            data = json.loads(raw)
+            data["payment_id"] = p.payment_id  # never trust the model to echo ids
+            data.setdefault("policy_checks", [])
+            data["confidence"] = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+            data["expected_recovery"] = max(0.0, float(data.get("expected_recovery", 0.0)))
+            data["source"] = "llm"
+            return AgentDecision(**data)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            code = getattr(exc, "status_code", None)
+            hard = code in (401, 402, 403)  # budget / auth: retrying rarely helps
+            _breaker_record(False, hard)
+            transient = code in (408, 409, 429, 500, 502, 503, 504) or (code == 402 and attempt == 0) or code is None
+            if not transient or attempt == LLM_MAX_RETRIES or _breaker_open():
+                break
+            # honour Retry-After if present, but cap it; otherwise exponential backoff w/ jitter
+            wait = 1.5 * (2 ** attempt) + random.random()
+            try:
+                ra = getattr(exc, "response", None).headers.get("retry-after")  # type: ignore[union-attr]
+                if ra:
+                    wait = min(float(ra), 8.0)
+            except Exception:  # noqa: BLE001
+                pass
+            log.info("LLM transient error (%s) for %s; retry %d/%d in %.1fs", code, p.payment_id, attempt + 1, LLM_MAX_RETRIES, wait)
+            time.sleep(wait)
+    log.warning("LLM decision failed for %s: %s", p.payment_id, str(last_exc)[:160])
+    return None
 
 
 def decide(p: Payment, use_llm: Optional[bool] = None) -> AgentDecision:

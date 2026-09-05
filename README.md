@@ -68,12 +68,22 @@ npm run build
 The database is seeded automatically with 500 synthetic failed payments on first start
 (`data/payments.csv` is regenerated from the same seed).
 
+### Running on a small API budget
+
+The agent has three layers of protection so a batch never stalls on a dead key:
+retry with backoff on transient errors → **circuit breaker** (3 consecutive 401/402/403 → fallback for 120 s) →
+per-decision `source` tag so metrics separate `llm` from `fallback`. With `LLM_SAMPLE=12` the demo cases are
+always LLM-decided and the remaining ~490 use the fallback. Health endpoint shows breaker state.
+
 ### Environment
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `OPENAI_API_KEY` | – | Enables the LLM agent brain. Without it a deterministic fallback is used and every decision is tagged `fallback`. |
-| `OPENAI_MODEL` | `gpt-4o-mini` | Any chat model supporting JSON mode. |
+| `OPENAI_API_KEY` | – | Enables the LLM agent brain. Accepts an OpenAI key (`sk-…`) **or an OpenRouter key (`sk-or-v1-…`)** — base URL and default model (`openai/gpt-4.1`) are auto-detected. Without it a deterministic fallback is used and every decision is tagged `fallback`. |
+| `OPENAI_MODEL` | `gpt-4o-mini` / `openai/gpt-4.1` | Any chat model supporting JSON mode. |
+| `OPENAI_BASE_URL` | auto | Override for any OpenAI-compatible endpoint. |
+| `LLM_CONCURRENCY` | `8` (`2` on OpenRouter) | Max parallel LLM calls. |
+| `LLM_SAMPLE` | – | **Hybrid mode for tight budgets**: LLM decides the 5 demo cases + first N−5 payments; fallback handles the rest. Sources stay tagged. |
 | `RECOVERAI_USE_LLM` | `1` | Set `0` to force the fallback even with a key. |
 | `RECOVERAI_PROVIDER` | `simulated` | `simulated` (Razorpay-shaped mock) or `razorpay` (real test-mode Orders / Payment Links). |
 | `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | – | Must be `rzp_test_…`; live keys are refused. |
