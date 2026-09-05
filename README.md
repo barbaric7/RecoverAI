@@ -17,17 +17,54 @@ FAILED PAYMENT → OBSERVE → REASON (LLM) → POLICY GATE → ACT → VERIFY �
 
 **The LLM recommends actions. It never has unrestricted access to money movement.**
 
-![RecoverAI demo](docs/demo.gif)
+<p align="center">
+  <img src="docs/media/full.gif" alt="RecoverAI full walkthrough" width="900">
+</p>
 
-*60-second loop: Run Recovery on 500 failed payments → P0042 retried & recovered → P0099 blocked by policy & escalated → P0210 stale event refused → audit trail. ([mp4](docs/demo.mp4))*
+<p align="center"><em>65-second walkthrough — Run recovery on 500 failed payments → P0042 retried & recovered → P0099 blocked by policy & escalated → P0210 stale event refused → audit trail.</em><br>
+<a href="docs/media/full.mp4">▶ full.mp4</a> · <a href="docs/media/">all clips</a></p>
+
+## Demo videos
+
+| Clip | What it shows | |
+|---|---|---|
+| **Live batch run** · 40s | Reset → Run recovery → progress bar, stepper on *Act*, decisions streaming into the table, KPIs updating live | [gif](docs/media/run.gif) · [mp4](docs/media/run.mp4) |
+| **Recovered** · 13s | P0042 — bank timeout, 88% history → *retry* → 9/9 policy checks ✓ → ₹2,499 recovered → audit trail | [gif](docs/media/recovered.gif) · [mp4](docs/media/recovered.mp4) |
+| **Escalated** · 12s | P0099 — ₹12,999 repeated failure → policy gate closes `amount_limit` + `retry_limit` → human review → *Policy checks* audit filter | [gif](docs/media/escalated.gif) · [mp4](docs/media/escalated.mp4) |
+| **Blocked & failed** · 11s | P0210 — payment already succeeded, policy refuses any action · P0117 — correct retry, bank declines again → *Unresolved*, budget accounting | [gif](docs/media/stale.gif) · [mp4](docs/media/stale.mp4) |
+
+<details>
+<summary>Preview the short clips inline</summary>
+
+**Live batch run**
+
+<img src="docs/media/run.gif" width="800">
+
+**Recovered (P0042)**
+
+<img src="docs/media/recovered.gif" width="800">
+
+**Escalated (P0099)**
+
+<img src="docs/media/escalated.gif" width="800">
+
+**Blocked stale event (P0210) + failed retry (P0117)**
+
+<img src="docs/media/stale.gif" width="800">
+
+</details>
 
 ## Screenshots
 
-| Overview | Payment detail (policy blocked) | Audit trail |
+| Overview | Payment detail (policy override) | Audit trail |
 |---|---|---|
-| ![](screenshots/01-overview.png) | ![](screenshots/06-payment-P0099-escalated.png) | ![](screenshots/10-audit-P0042.png) |
+| [![](screenshots/01-overview.png)](screenshots/01-overview.png) | [![](screenshots/06-payment-P0099-escalated.png)](screenshots/06-payment-P0099-escalated.png) | [![](screenshots/10-audit-P0042.png)](screenshots/10-audit-P0042.png) |
 
-13 annotated captures in [`screenshots/`](screenshots/README.md). Live deploy guide: [`DEPLOY.md`](DEPLOY.md) (Vercel + Render, free tier).
+| Live run in progress | Stale event blocked | Payment link recovery |
+|---|---|---|
+| [![](screenshots/03-run-in-progress.png)](screenshots/03-run-in-progress.png) | [![](screenshots/08-payment-P0210-stale-event-blocked.png)](screenshots/08-payment-P0210-stale-event-blocked.png) | [![](screenshots/05-payment-P0003-payment-link.png)](screenshots/05-payment-P0003-payment-link.png) |
+
+13 annotated captures in [`screenshots/`](screenshots/README.md) · re-record media with `scripts/record_media.py` · deploy guide in [`DEPLOY.md`](DEPLOY.md).
 
 ## Results at a glance
 
@@ -205,7 +242,7 @@ Metric definitions:
 ## Demo script (5 steps, ~4 minutes)
 
 1. **Overview** — "500 failed payments, ₹20.6L at risk." Click **Run Recovery**. Progress bar,
-   KPIs animate in ~5s (fallback) / ~60–90s (LLM with 16 workers).
+   KPIs animate in ~5s (fallback) / ~35s (hybrid LLM mode).
 2. **P0042** (₹2,499, bank timeout, 88% history) → RETRY → **recovered**. Walk down the four cards:
    failure → AI diagnosis (91%) → 9 policy checks all green → retry executed → ₹2,499 recovered.
 3. **P0003** (₹8,999, expired card) → agent picks **payment link**, not retry — "retrying a dead card is pointless."
